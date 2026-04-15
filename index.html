@@ -1270,13 +1270,13 @@ Check your Browserslist config to be sure that your targets are set up correctly
     }
     function cloudStatusLabel() {
       if (!isCloudConfigured()) return '未配置';
-      if (!isCloudSessionAvailable()) return '待登录';
-      if (!isCloudPassphraseReady()) return '待输入同步口令';
       if (cloudRuntime.lastError) return `异常：${cloudRuntime.lastError}`;
+      if (!isCloudSessionAvailable()) return '待登录';
+      if (!isCloudPassphraseReady()) return '已登录，待输入同步口令';
       if (cloudRuntime.saving) return '正在上传密文';
       if (cloudRuntime.available && cloudRuntime.lastSyncedAt) return `已加密同步 · ${cloudRuntime.lastSyncedAt}`;
-      if (cloudRuntime.available) return '已连接云端';
-      return '已配置，等待同步';
+      if (cloudRuntime.available) return '已登录，等待首次上传';
+      return '已登录，等待同步';
     }
     function syncModeBadgeLabel() {
       if (isCloudConfigured()) return '云端加密同步';
@@ -1358,6 +1358,17 @@ Check your Browserslist config to be sure that your targets are set up correctly
       cloudRuntime.available = false;
       cloudRuntime.lastError = message;
       saveCloudSession();
+    }
+    function blockCloudAction(message, { render = true } = {}) {
+      cloudRuntime.lastError = message;
+      if (render && currentSection === 'settings-section') renderSettingsSection();
+      return false;
+    }
+    function getCloudActionBlocker(actionText) {
+      if (!isCloudConfigured()) return '请先保存 Supabase 项目配置';
+      if (!isCloudSessionAvailable()) return '请先登录云端账号';
+      if (!isCloudPassphraseReady()) return `请输入同步口令后再${actionText}`;
+      return '';
     }
     async function cloudAuthFetch(path, options = {}) {
       updateCloudConfigFromInputs();
@@ -1451,11 +1462,8 @@ Check your Browserslist config to be sure that your targets are set up correctly
       return Array.isArray(rows) ? (rows[0] || null) : null;
     }
     async function pullCloudState({ forceApply = false, render = true } = {}) {
-      if (!isCloudConfigured() || !isCloudPassphraseReady()) {
-        if (!isCloudPassphraseReady()) cloudRuntime.lastError = '请输入同步口令后再拉取云端';
-        if (render && currentSection === 'settings-section') renderSettingsSection();
-        return false;
-      }
+      const blocker = getCloudActionBlocker('拉取云端数据');
+      if (blocker) return blockCloudAction(blocker, { render });
       try {
         const row = await fetchCloudRow();
         cloudRuntime.available = true;
@@ -1491,16 +1499,12 @@ Check your Browserslist config to be sure that your targets are set up correctly
       }
     }
     async function pushCloudState() {
-      if (!isCloudConfigured()) return;
-      if (!isCloudPassphraseReady()) {
-        cloudRuntime.lastError = '请输入同步口令后再上传云端';
-        if (currentSection === 'settings-section') renderSettingsSection();
-        return;
-      }
-      if (cloudRuntime.applyingRemote) return;
+      const blocker = getCloudActionBlocker('上传云端');
+      if (blocker) return blockCloudAction(blocker);
+      if (cloudRuntime.applyingRemote) return blockCloudAction('正在应用云端数据，请稍后再上传');
       if (cloudRuntime.saving) {
         cloudRuntime.queuedSave = true;
-        return;
+        return blockCloudAction('上一轮上传尚未完成，请稍候');
       }
       cloudRuntime.saving = true;
       cloudRuntime.queuedSave = false;
@@ -1521,9 +1525,11 @@ Check your Browserslist config to be sure that your targets are set up correctly
         cloudRuntime.lastError = '';
         cloudRuntime.lastRemoteUpdatedAtMs = row?.updated_at ? Date.parse(row.updated_at) : Date.now();
         cloudRuntime.lastSyncedAt = formatSyncDateTime(cloudRuntime.lastRemoteUpdatedAtMs);
+        return true;
       } catch (e) {
         cloudRuntime.available = false;
         cloudRuntime.lastError = e?.message || '云端上传失败';
+        return false;
       } finally {
         cloudRuntime.saving = false;
         if (cloudRuntime.queuedSave) queueCloudSave();
@@ -2673,7 +2679,13 @@ Check your Browserslist config to be sure that your targets are set up correctly
         try {
           updateCloudConfigFromInputs();
           const changed = await pullCloudState({ forceApply: true, render: true });
-          if (!changed) alert('云端没有更新的数据，或当前账号下还没有云端记录。');
+          if (changed) {
+            alert('已从云端拉取并解密当前数据。');
+          } else if (cloudRuntime.lastError) {
+            alert(cloudRuntime.lastError);
+          } else {
+            alert('云端没有更新的数据，或当前账号下还没有云端记录。');
+          }
         } catch (e) {
           alert(e?.message || '拉取失败');
         }
@@ -2681,8 +2693,12 @@ Check your Browserslist config to be sure that your targets are set up correctly
       document.getElementById('cloudPushBtn').addEventListener('click', async () => {
         try {
           updateCloudConfigFromInputs();
-          await pushCloudState();
-          if (!cloudRuntime.lastError) alert('已把当前页面数据加密后上传到云端。');
+          const pushed = await pushCloudState();
+          if (pushed) {
+            alert('已把当前页面数据加密后上传到云端。');
+          } else if (cloudRuntime.lastError) {
+            alert(cloudRuntime.lastError);
+          }
         } catch (e) {
           alert(e?.message || '上传失败');
         }
