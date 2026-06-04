@@ -1,0 +1,10 @@
+# This repository is public. Keep working backups local by default.
+Codex/*
+!Codex/.gitkeep
+!Codex/README.md
+
+Claud code/*
+!Claud code/.gitkeep
+!Claud code/README.md
+
+.DS_Store
